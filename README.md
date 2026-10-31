@@ -18,7 +18,8 @@ cp env/cisco/.env.example env/cisco/.env
 ```
 
 ```
-ANYCONNECT_SERVER=vpn.example.com
+ANYCONNECT_SERVERS=mci3.npvip.net,mci2.npvip.net,mci1.npvip.net,mci.npvip.net
+VPN_RECONNECT_SECONDS=43200
 ANYCONNECT_USER=your_username
 ANYCONNECT_PASSWORD=your_password
 ANYCONNECT_SERVERCERT=pin-sha256:REPLACE_WITH_VERIFIED_SERVER_PIN
@@ -52,16 +53,16 @@ establishing a tunnel is limited to 150 seconds. Broken connections are
 detected using OpenConnect dead-peer detection and process/interface checks.
 Existing proxy connections close during a reconnect.
 
-Override the list or interval through the shell when starting Compose:
+Edit `env/cisco/.env` to change the server list or reconnect interval:
 
-```bash
-ANYCONNECT_SERVERS=vpn1.example.com,vpn2.example.com VPN_RECONNECT_SECONDS=43200 docker compose up -d --build
+```dotenv
+ANYCONNECT_SERVERS=mci3.npvip.net,mci2.npvip.net,mci1.npvip.net,mci.npvip.net
+VPN_RECONNECT_SECONDS=43200
 ```
 
-These Compose overrides come from the shell or a project-root Compose `.env`,
-not `env/cisco/.env`. Without Compose, the entrypoint accepts `ANYCONNECT_SERVERS`
-or falls back to the single `ANYCONNECT_SERVER`. A configured certificate pin
-must be valid for each server in the list.
+Apply changes with `docker compose up -d --force-recreate`.
+The entrypoint also accepts a single `ANYCONNECT_SERVER` when no list is set.
+A configured certificate pin must be valid for each server in the list.
 
 ## Custom port
 
