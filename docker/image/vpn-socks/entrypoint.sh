@@ -7,7 +7,14 @@ set -e
 # ---------------------------------------------------------------------------
 
 # ── Required environment ──────────────────────────────────────────────────
-: "${ANYCONNECT_SERVER:?ANYCONNECT_SERVER is required}"
+ANYCONNECT_SERVERS="${ANYCONNECT_SERVERS:-${ANYCONNECT_SERVER:-}}"
+: "${ANYCONNECT_SERVERS:?ANYCONNECT_SERVERS or ANYCONNECT_SERVER is required}"
+VPN_RECONNECT_SECONDS="${VPN_RECONNECT_SECONDS:-43200}"
+VPN_RETRY_SECONDS="${VPN_RETRY_SECONDS:-5}"
+VPN_CONNECT_TIMEOUT="${VPN_CONNECT_TIMEOUT:-150}"
+for value in "$VPN_RECONNECT_SECONDS" "$VPN_RETRY_SECONDS" "$VPN_CONNECT_TIMEOUT"; do
+  case "$value" in ''|*[!0-9]*|0) echo "VPN timeouts must be positive integer seconds" >&2; exit 1;; esac
+done
 : "${ANYCONNECT_USER:?ANYCONNECT_USER is required}"
 : "${ANYCONNECT_PASSWORD:?ANYCONNECT_PASSWORD is required}"
 
@@ -15,7 +22,7 @@ SOCKS_PORT="${SOCKS_PORT:-1080}"
 VPN_INTERFACE="tun0"
 TUN2SOCKS_INTERFACE="tun1"
 TUN2SOCKS_SUBNET="198.18.0.1/15"
-MAX_WAIT_ITERATIONS=75            # 75 x 2s = 150s max wait for tunnel
+MAX_WAIT_ITERATIONS=$(( (VPN_CONNECT_TIMEOUT + 1) / 2 ))
 
 # Save original gateway BEFORE OpenConnect touches the routing table
 ORIG_GW=$(ip route 2>/dev/null  | awk '/default via/ {print $3; exit}')
@@ -41,21 +48,7 @@ build_credentials() {
 get_tunnel_ip() {
   local ip
 
-  # Try well-known tun/tap devices first
-  for dev in tun0 tun1 tun2 tap0; do
-    ip=$(ip -4 -o addr show "$dev" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
-    [ -n "$ip" ] && echo "$ip" && return
-  done
-
-  # Fallback: any tun/tap/vhost interface
-  ip=$(ip -4 -o addr show 2>/dev/null | awk '
-    $2 ~ /^tun|^tap|^vhost/ { gsub(/\/.*/,"",$4); print $4; exit }
-  ')
-  [ -n "$ip" ] && echo "$ip" && return
-
-  # Last resort: parse openconnect log for "Configured as x.x.x.x"
-  ip=$(grep -oE 'Configured as [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$OC_LOG" 2>/dev/null \
-       | awk '{print $3}')
+  ip=$(ip -4 -o addr show "$VPN_INTERFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
   [ -n "$ip" ] && echo "$ip"
 }
 
@@ -94,7 +87,7 @@ set_vpn_default_route() {
   fi
 
   # 2) Replace default route to go through VPN tunnel
-  for dev in tun0 tun1; do
+  for dev in "$VPN_INTERFACE"; do
     if ip link show "$dev" up 2>/dev/null | grep -q "$dev"; then
       ip route replace default dev "$dev" metric 0 2>/dev/null || continue
       # Demote original default so VPN wins
@@ -114,15 +107,11 @@ start_dante() {
   # MUST be the tunnel IP so traffic goes through the VPN, not eth0.
   local dante_ip="$TUN_IP"
 
-  # Fallback: if tunnel IP isn't bindable, use first non-lo (rare vhost-net case)
-  if ! ip -4 -o addr show 2>/dev/null | grep -q "$dante_ip"; then
-    dante_ip=$(ip -4 -o addr show 2>/dev/null \
-               | awk '$2 !~ /^lo$/ { gsub(/\/.*/,"",$4); print $4; exit }')
-    log "WARNING: tunnel IP not bindable, using $dante_ip (traffic may bypass VPN)"
-  fi
+  ip -4 -o addr show "$VPN_INTERFACE" | grep -q "$dante_ip" || return 1
 
   sed "s/EXTERNAL_IP_PLACEHOLDER/$dante_ip/" /etc/sockd.conf.template > /tmp/sockd.conf
-  sockd -f /tmp/sockd.conf &
+  # A separate process group lets cleanup stop active Dante workers as well.
+  setsid sockd -f /tmp/sockd.conf &
   SOCKD_PID=$!
   log "Dante SOCKS5 listening on :$SOCKS_PORT (external=$dante_ip)"
   sleep 1
@@ -146,62 +135,96 @@ start_tun2socks() {
   log "tun2socks: $TUN2SOCKS_INTERFACE ($TUN2SOCKS_SUBNET) -> socks5://127.0.0.1:$SOCKS_PORT via $bind_if"
 }
 
-# ── Cleanup ───────────────────────────────────────────────────────────────
-cleanup() {
-  log "Shutting down..."
-  kill $OC_PID $SOCKD_PID $TUN2_PID 2>/dev/null
-  rm -f "$CREDS" "$OC_LOG"
-  exit 0
+# Stop all session processes before restoring routes or trying another server.
+stop_session() {
+  local pid
+  if [ -n "$SOCKD_PID" ]; then
+    kill -TERM -- "-$SOCKD_PID" 2>/dev/null || true
+  fi
+  for pid in "$SOCKD_PID" "$TUN2_PID" "$OC_PID" "$LOG_PID"; do
+    [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+  done
+  # Give OpenConnect a bounded graceful shutdown, then reap all children.
+  local n=0
+  while [ -n "$OC_PID" ] && kill -0 "$OC_PID" 2>/dev/null && [ "$n" -lt 5 ]; do
+    sleep 1
+    n=$((n + 1))
+  done
+  if [ -n "$SOCKD_PID" ]; then
+    kill -KILL -- "-$SOCKD_PID" 2>/dev/null || true
+  fi
+  for pid in "$SOCKD_PID" "$TUN2_PID" "$OC_PID" "$LOG_PID"; do
+    [ -z "$pid" ] || kill -KILL "$pid" 2>/dev/null || true
+    [ -z "$pid" ] || wait "$pid" 2>/dev/null || true
+  done
+  OC_PID="" SOCKD_PID="" TUN2_PID="" LOG_PID=""
+  ip link delete "$TUN2SOCKS_INTERFACE" 2>/dev/null || true
+  ip link delete "$VPN_INTERFACE" 2>/dev/null || true
+  if [ -n "$ORIG_GW" ] && [ -n "$ORIG_IF" ]; then
+    ip route replace default via "$ORIG_GW" dev "$ORIG_IF" metric 0
+    ip route del default via "$ORIG_GW" dev "$ORIG_IF" metric 200 2>/dev/null || true
+  fi
 }
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  Main
-# ═══════════════════════════════════════════════════════════════════════════
+cleanup() {
+  trap '' TERM INT
+  stop_session
+  rm -f "$CREDS" "$OC_LOG"
+}
 
 CREDS=$(mktemp)
 OC_LOG=$(mktemp)
-trap cleanup TERM INT
-trap 'rm -f "$CREDS" "$OC_LOG"' EXIT
+OC_PID="" SOCKD_PID="" TUN2_PID="" LOG_PID=""
+trap 'exit 0' TERM INT
+trap cleanup EXIT
 
-# 1. Build credentials file
-build_credentials "$CREDS"
+# Each attempt runs in the same supervisor; a full failed cycle waits before retrying.
+# Intentional word splitting accepts comma- or whitespace-separated server names.
+SERVER_LIST=$(printf '%s' "$ANYCONNECT_SERVERS" | tr ',' ' ')
+set -f
+[ -n "$(printf '%s' "$SERVER_LIST" | tr -d '[:space:]')" ] || die "Server list is empty"
+while :; do
+  for ANYCONNECT_SERVER in $SERVER_LIST; do
+    build_credentials "$CREDS"
+    : > "$OC_LOG"
+    ip tuntap add mode tun dev "$VPN_INTERFACE"
+    set -- --timestamp --user="$ANYCONNECT_USER" --passwd-on-stdin \
+      --script=/vpnc-script.sh --interface="$VPN_INTERFACE" \
+      --reconnect-timeout=1 --force-dpd=10
+    if [ -n "$ANYCONNECT_SERVERCERT" ]; then
+      set -- "$@" --servercert="$ANYCONNECT_SERVERCERT"
+    fi
 
-# 2. Prepare tun device
-ip tuntap add mode tun dev "$VPN_INTERFACE" 2>/dev/null || true
-
-# 3. Build and launch OpenConnect
-set -- --timestamp --user="$ANYCONNECT_USER" --passwd-on-stdin \
-  --script=/vpnc-script.sh --interface="$VPN_INTERFACE"
-if [ -n "$ANYCONNECT_SERVERCERT" ]; then
-  set -- "$@" --servercert="$ANYCONNECT_SERVERCERT"
-fi
-
-log "Connecting to $ANYCONNECT_SERVER..."
-openconnect "$ANYCONNECT_SERVER" "$@" < "$CREDS" 2>&1 \
-  | while IFS= read -r line; do echo "$line"; echo "$line" >> "$OC_LOG"; done &
-OC_PID=$!
-
-# 4. Wait for tunnel
-TUN_IP=""
-if wait_for_tunnel; then
-  log "VPN connected ($TUN_IP)"
-  set_vpn_default_route || true
-else
-  kill "$OC_PID" 2>/dev/null || true
-  die "VPN tunnel unavailable; refusing to start SOCKS without VPN"
-fi
-
-# 5. Start SOCKS5 proxy
-start_dante
-
-# 6. Start tun2socks
-start_tun2socks
-
-# Debug: show final routing table
-log "Routing table:"
-ip route 2>/dev/null | sed 's/^/  /' >&2
-log "Interfaces:"
-ip -4 -o addr show 2>/dev/null | sed 's/^/  /' >&2
-
-log "Ready. SOCKS5 on :$SOCKS_PORT | tun2socks on $TUN2SOCKS_INTERFACE"
-wait
+    log "Connecting to $ANYCONNECT_SERVER..."
+    openconnect "$ANYCONNECT_SERVER" "$@" < "$CREDS" > "$OC_LOG" 2>&1 &
+    OC_PID=$!
+    tail -n +1 -f "$OC_LOG" &
+    LOG_PID=$!
+    TUN_IP=""
+    if wait_for_tunnel && set_vpn_default_route; then
+      log "VPN connected ($TUN_IP)"
+      start_dante
+      start_tun2socks
+      connected_at=$(date +%s)
+      log "Ready. SOCKS5 on :$SOCKS_PORT; reconnect in ${VPN_RECONNECT_SECONDS}s"
+      while kill -0 "$OC_PID" 2>/dev/null && \
+            kill -0 "$SOCKD_PID" 2>/dev/null && \
+            kill -0 "$TUN2_PID" 2>/dev/null; do
+        if [ "$(( $(date +%s) - connected_at ))" -ge "$VPN_RECONNECT_SECONDS" ]; then
+          log "Scheduled reconnect: switching to the next server"
+          break
+        fi
+        # Check the VPN interface only; tun2socks must never count as a VPN.
+        TUN_IP=$(get_tunnel_ip) || true
+        if [ -z "$TUN_IP" ]; then
+          log "VPN tunnel disappeared; switching to the next server"
+          break
+        fi
+        sleep 2
+      done
+    fi
+    log "Ending session on $ANYCONNECT_SERVER; trying next server"
+    stop_session
+    sleep "$VPN_RETRY_SECONDS"
+  done
+done

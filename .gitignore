@@ -7,3 +7,4 @@
 *.swo
 .env.*
 !.env.example
+__pycache__/

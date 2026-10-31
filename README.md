@@ -41,6 +41,28 @@ curl -x socks5h://127.0.0.1:1080 https://ifconfig.io
 ./scripts/check-socks.sh
 ```
 
+## Reconnection and server failover
+
+Docker Compose tries `mci3.npvip.net`, `mci2.npvip.net`,
+`mci1.npvip.net`, then `mci.npvip.net`, in that order, using the same
+credentials. After a connection failure, disconnection, or 12 hours of an
+established session, it stops the proxy and VPN and tries the next server.
+After the last server it returns to the first. Attempts wait 5 seconds;
+establishing a tunnel is limited to 150 seconds. Broken connections are
+detected using OpenConnect dead-peer detection and process/interface checks.
+Existing proxy connections close during a reconnect.
+
+Override the list or interval through the shell when starting Compose:
+
+```bash
+ANYCONNECT_SERVERS=vpn1.example.com,vpn2.example.com VPN_RECONNECT_SECONDS=43200 docker compose up -d --build
+```
+
+These Compose overrides come from the shell or a project-root Compose `.env`,
+not `env/cisco/.env`. Without Compose, the entrypoint accepts `ANYCONNECT_SERVERS`
+or falls back to the single `ANYCONNECT_SERVER`. A configured certificate pin
+must be valid for each server in the list.
+
 ## Custom port
 
 ```bash

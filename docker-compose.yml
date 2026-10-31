@@ -4,6 +4,9 @@ services:
       context: docker/image/vpn-socks
     env_file:
       - ./env/cisco/.env
+    environment:
+      ANYCONNECT_SERVERS: ${ANYCONNECT_SERVERS:-mci3.npvip.net,mci2.npvip.net,mci1.npvip.net,mci.npvip.net}
+      VPN_RECONNECT_SECONDS: ${VPN_RECONNECT_SECONDS:-43200}
     ports:
       - "127.0.0.1:1080:1080"
     privileged: true
