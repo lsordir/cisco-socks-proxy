@@ -1,6 +1,5 @@
-version: "2.3"
+# Override SOCKS port: CISCO_SOCKS_PORT=8080 docker compose -f docker-compose.yml -f docker/docker-compose.publish.yml up -d
 services:
-  cisco:
+  vpn-socks:
     ports:
-      - 127.0.0.1:${CISCO_SOCKS_PORT:-1080}:1080
-      - 127.0.0.1:${CISCO_HTTP_PORT:-10001}:10001
+      - "127.0.0.1:${CISCO_SOCKS_PORT:-1080}:1080"

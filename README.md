@@ -1,60 +1,52 @@
-Introduction
-============
+# Cisco AnyConnect SOCKS Proxy
 
-This service for connect to CISCO VPN and use with Socks V5 proxy
+Connect to a Cisco AnyConnect VPN via **OpenConnect** and expose a **SOCKS5** proxy.
+All traffic routed through the proxy goes over the VPN tunnel.
 
-Run
-===
+Runs inside a single Docker container:
 
-After clone project you should copy .env.example to .env (For config service). Then you fill CISCO VPN environment
-variable in `.env` file
+- **OpenConnect** -- connects to the VPN
+- **Dante** -- SOCKS5 server on port 1080
+- **tun2socks** -- optional TUN device (`tun1` 198.18.0.1/15) for transparent proxying
+
+## Quick start
+
+1. Copy the sample configuration, then edit `env/cisco/.env` locally:
 
 ```bash
 cp env/cisco/.env.example env/cisco/.env
-
-# Fill variable with you editor
-vi env/cisco/.env
 ```
 
-Before you start creating iptables rules, you should make some alterations to the sysctl configuration. You can use
-below command for check sysctl `net.ipv4.ip_forward`
+```
+ANYCONNECT_SERVER=vpn.example.com
+ANYCONNECT_USER=your_username
+ANYCONNECT_PASSWORD=your_password
+ANYCONNECT_SERVERCERT=pin-sha256:REPLACE_WITH_VERIFIED_SERVER_PIN
+```
+
+Set `ANYCONNECT_SERVERCERT` to a verified pin, or leave it empty to accept
+the server certificate automatically. Automatic acceptance does not verify
+the server's identity and allows man-in-the-middle attacks.
+The real `.env` file is ignored by Git; never commit VPN credentials.
+
+2. Start and test:
 
 ```bash
-sysctl net.ipv4.ip_forward
+docker compose up -d --build
+
+# VPN takes ~30-60s. Then:
+curl -x socks5h://127.0.0.1:1080 https://ifconfig.io
+
+# Or use the helper script (retries up to ~150s):
+./scripts/check-socks.sh
 ```
 
-if Output of above command is zero you have to execute below command for enable `net.ipv4.ip_forward`
+## Custom port
 
 ```bash
-sysctl -w net.ipv4.ip_forward=1
-
-# Or
-echo 1 > /proc/sys/net/ipv4/ip_forward
+CISCO_SOCKS_PORT=8080 docker compose -f docker-compose.yml -f docker/docker-compose.publish.yml up -d
 ```
 
-After editing the file, you can run the following command to make the changes take effect right away.
+## License
 
-```bash
-sysctl -p
-```
-
-Now start docker container
-
-```bash
-docker-compose -f docker-compose.yml -f docker/docker-compose.env.yml up -d
-```
-
-Usa proxy
-=========
-
-This service create network in range 10.101.0.0/29 and proxy run in 10.101.0.2
-
-```bash
-### No need use username and password for connect to proxy
-
-### Socks proxy
-curl -x socks5h://10.101.0.2:1080 ifconfig.io
-
-### Http proxy
-curl -x http://10.101.0.2:10001 ifconfig.io
-```
+MIT

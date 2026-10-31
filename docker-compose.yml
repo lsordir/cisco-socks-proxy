@@ -1,50 +1,10 @@
-version: "2.3"
 services:
-  cisco:
+  vpn-socks:
     build:
-      context: docker/image/cisco
-    networks:
-      main:
-        ipv4_address: 10.101.0.2
+      context: docker/image/vpn-socks
+    env_file:
+      - ./env/cisco/.env
+    ports:
+      - "127.0.0.1:1080:1080"
     privileged: true
-    cap_add:
-      - NET_ADMIN
-    restart: "always"
-    security_opt:
-      - label:disable
-
-  socks5:
-    image: wernight/dante
-    depends_on:
-      - cisco
-    volumes:
-      - $PWD/storage/docker/socks5/sockd.conf:/etc/sockd.conf
-    healthcheck:
-      test: [ "CMD-SHELL", "test `ip -o a show | cut -d ' ' -f 2 | grep tun0 | wc -l` -eq 1 || kill 1" ]
-      interval: 11s
-      timeout: 2s
-    restart: "always"
-    network_mode: "service:cisco"
-
-  envoy:
-    image: envoyproxy/envoy-alpine:v1.20.0
-    depends_on:
-      - cisco
-    volumes:
-      - $PWD/storage/docker/envoy:/etc/envoy/
-    healthcheck:
-      test: [ "CMD-SHELL", "test `ip -o a show | cut -d ' ' -f 2 | grep tun0 | wc -l` -eq 1 || kill 1" ]
-      interval: 11s
-      timeout: 2s
-    restart: "always"
-    network_mode: "service:cisco"
-
-networks:
-  main:
-    driver: bridge
-    enable_ipv6: false
-    ipam:
-      driver: default
-      config:
-        - subnet: 10.101.0.0/29
-          gateway: 10.101.0.1
+    restart: unless-stopped
