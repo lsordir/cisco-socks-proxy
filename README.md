@@ -64,6 +64,15 @@ Apply changes with `docker compose up -d --force-recreate`.
 The entrypoint also accepts a single `ANYCONNECT_SERVER` when no list is set.
 A configured certificate pin must be valid for each server in the list.
 
+After connecting, the proxy must pass an HTTPS internet check before logging
+`Ready`. Checks run through `socks5h://127.0.0.1:1080`, including remote DNS,
+and repeat every 60 seconds. If both configured endpoints fail in two rounds,
+the service switches to the next VPN server. Each request has a 10-second
+limit. Any endpoint returning HTTP 2xx counts as success; one unavailable
+endpoint alone does not trigger failover. Configure `VPN_CHECK_INTERVAL`,
+`VPN_CHECK_TIMEOUT`, `VPN_CHECK_ATTEMPTS`, and space-separated `VPN_CHECK_URLS`
+in `env/cisco/.env`; see `.env.example` for defaults.
+
 ## Custom port
 
 ```bash

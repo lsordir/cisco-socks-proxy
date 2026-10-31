@@ -35,8 +35,19 @@ elif name == 'openconnect':
         time.sleep(300)
         sys.exit(1)
     (state / 'vpn-pid').write_text(str(os.getpid()))
+    (state / 'server').write_text(args[0])
     (state / 'tunnel').touch()
     time.sleep(300)
+elif name == 'curl':
+    assert args[args.index('--proxy') + 1] == 'socks5h://127.0.0.1:1080'
+    assert args[args.index('--noproxy') + 1] == ''
+    with (state / 'probes').open('a') as f:
+        f.write(args[-1] + '\\n')
+    if ((state / 'server').read_text() == 'offline'
+            or (state / 'outage').exists()
+            or args[-1] == 'https://unavailable.test'):
+        sys.exit(28)
+    print('204', end='')
 '''
 
 
@@ -45,7 +56,7 @@ class FailoverTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state = Path(self.tmp.name)
-        for name in ('ip', 'getent', 'openconnect'):
+        for name in ('ip', 'getent', 'openconnect', 'curl'):
             p = self.state / name
             p.write_text(FAKE)
             p.chmod(0o755)
@@ -59,12 +70,14 @@ CREDS=$(mktemp)''')
         self.script = self.state / 'entrypoint.sh'
         self.script.write_text(script)
 
-    def start(self, servers, interval):
+    def start(self, servers, interval, urls='https://primary.test https://backup.test'):
         env = dict(os.environ, PATH=str(self.state) + ':' + os.environ['PATH'],
                    TEST_STATE=str(self.state), ANYCONNECT_SERVERS=servers,
                    ANYCONNECT_USER='dummy-user', ANYCONNECT_PASSWORD='dummy-password',
                    ANYCONNECT_SERVERCERT='', VPN_RECONNECT_SECONDS=str(interval),
-                   VPN_RETRY_SECONDS='1', VPN_CONNECT_TIMEOUT='4')
+                   VPN_RETRY_SECONDS='1', VPN_CONNECT_TIMEOUT='4',
+                   VPN_CHECK_INTERVAL='2', VPN_CHECK_TIMEOUT='1',
+                   VPN_CHECK_ATTEMPTS='2', VPN_CHECK_URLS=urls)
         self.output = (self.state / 'output').open('w')
         self.addCleanup(self.output.close)
         self.proc = subprocess.Popen(['sh', str(self.script)], env=env,
@@ -121,6 +134,27 @@ CREDS=$(mktemp)''')
         (self.state / 'tunnel').unlink()
         self.wait_for(lambda: len(self.attempts()) >= 2)
         self.assertEqual(self.attempts()[:2], ['first', 'second'])
+
+    def test_connected_server_without_internet_is_skipped(self):
+        self.start('offline online', interval=60)
+        self.wait_for(lambda: 'Ready.' in (self.state / 'output').read_text())
+        self.assertEqual(self.attempts()[:2], ['offline', 'online'])
+        self.assertIn('Internet check failed on offline', (self.state / 'output').read_text())
+
+    def test_periodic_internet_outage_moves_to_next_server(self):
+        self.start('first second', interval=60)
+        self.wait_for(lambda: 'Ready.' in (self.state / 'output').read_text())
+        (self.state / 'outage').touch()
+        self.wait_for(lambda: len(self.attempts()) >= 2)
+        self.assertEqual(self.attempts()[:2], ['first', 'second'])
+
+    def test_one_unavailable_endpoint_does_not_trigger_failover(self):
+        self.start('first second', interval=60,
+                   urls='https://unavailable.test https://backup.test')
+        self.wait_for(lambda: 'Ready.' in (self.state / 'output').read_text())
+        self.assertEqual(self.attempts(), ['first'])
+        self.assertEqual((self.state / 'probes').read_text().splitlines()[:2],
+                         ['https://unavailable.test', 'https://backup.test'])
 
 
 if __name__ == '__main__':

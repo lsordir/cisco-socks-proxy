@@ -12,7 +12,12 @@ ANYCONNECT_SERVERS="${ANYCONNECT_SERVERS:-${ANYCONNECT_SERVER:-}}"
 VPN_RECONNECT_SECONDS="${VPN_RECONNECT_SECONDS:-43200}"
 VPN_RETRY_SECONDS="${VPN_RETRY_SECONDS:-5}"
 VPN_CONNECT_TIMEOUT="${VPN_CONNECT_TIMEOUT:-150}"
-for value in "$VPN_RECONNECT_SECONDS" "$VPN_RETRY_SECONDS" "$VPN_CONNECT_TIMEOUT"; do
+VPN_CHECK_INTERVAL="${VPN_CHECK_INTERVAL:-60}"
+VPN_CHECK_TIMEOUT="${VPN_CHECK_TIMEOUT:-10}"
+VPN_CHECK_ATTEMPTS="${VPN_CHECK_ATTEMPTS:-2}"
+VPN_CHECK_URLS="${VPN_CHECK_URLS:-https://www.gstatic.com/generate_204 https://www.cloudflare.com/cdn-cgi/trace}"
+for value in "$VPN_RECONNECT_SECONDS" "$VPN_RETRY_SECONDS" "$VPN_CONNECT_TIMEOUT" \
+             "$VPN_CHECK_INTERVAL" "$VPN_CHECK_TIMEOUT" "$VPN_CHECK_ATTEMPTS"; do
   case "$value" in ''|*[!0-9]*|0) echo "VPN timeouts must be positive integer seconds" >&2; exit 1;; esac
 done
 : "${ANYCONNECT_USER:?ANYCONNECT_USER is required}"
@@ -135,6 +140,27 @@ start_tun2socks() {
   log "tun2socks: $TUN2SOCKS_INTERFACE ($TUN2SOCKS_SUBNET) -> socks5://127.0.0.1:$SOCKS_PORT via $bind_if"
 }
 
+# Test DNS, TCP and verified HTTPS through Dante, never the host connection.
+# Any successful endpoint is sufficient; retry a failed round before failover.
+check_internet() {
+  local attempt=0 url status
+  while [ "$attempt" -lt "$VPN_CHECK_ATTEMPTS" ]; do
+    for url in $VPN_CHECK_URLS; do
+      status=$(curl --silent --fail --noproxy "" \
+        --proxy "socks5h://127.0.0.1:$SOCKS_PORT" \
+        --connect-timeout "$VPN_CHECK_TIMEOUT" --max-time "$VPN_CHECK_TIMEOUT" \
+        --output /dev/null --write-out '%{http_code}' "$url") || continue
+      case "$status" in
+        2??) log "Internet check passed through VPN ($url)"; return 0;;
+      esac
+    done
+    attempt=$((attempt + 1))
+    [ "$attempt" -ge "$VPN_CHECK_ATTEMPTS" ] || sleep 2
+  done
+  log "Internet check failed on $ANYCONNECT_SERVER; switching to the next server"
+  return 1
+}
+
 # Stop all session processes before restoring routes or trying another server.
 stop_session() {
   local pid
@@ -206,22 +232,30 @@ while :; do
       start_dante
       start_tun2socks
       connected_at=$(date +%s)
-      log "Ready. SOCKS5 on :$SOCKS_PORT; reconnect in ${VPN_RECONNECT_SECONDS}s"
-      while kill -0 "$OC_PID" 2>/dev/null && \
-            kill -0 "$SOCKD_PID" 2>/dev/null && \
-            kill -0 "$TUN2_PID" 2>/dev/null; do
-        if [ "$(( $(date +%s) - connected_at ))" -ge "$VPN_RECONNECT_SECONDS" ]; then
-          log "Scheduled reconnect: switching to the next server"
-          break
-        fi
-        # Check the VPN interface only; tun2socks must never count as a VPN.
-        TUN_IP=$(get_tunnel_ip) || true
-        if [ -z "$TUN_IP" ]; then
-          log "VPN tunnel disappeared; switching to the next server"
-          break
-        fi
-        sleep 2
-      done
+      log "Checking internet access through VPN..."
+      if check_internet; then
+        last_check=$(date +%s)
+        log "Ready. SOCKS5 on :$SOCKS_PORT; reconnect in ${VPN_RECONNECT_SECONDS}s"
+        while kill -0 "$OC_PID" 2>/dev/null && \
+              kill -0 "$SOCKD_PID" 2>/dev/null && \
+              kill -0 "$TUN2_PID" 2>/dev/null; do
+          if [ "$(( $(date +%s) - connected_at ))" -ge "$VPN_RECONNECT_SECONDS" ]; then
+            log "Scheduled reconnect: switching to the next server"
+            break
+          fi
+          # Check the VPN interface only; tun2socks must never count as a VPN.
+          TUN_IP=$(get_tunnel_ip) || true
+          if [ -z "$TUN_IP" ]; then
+            log "VPN tunnel disappeared; switching to the next server"
+            break
+          fi
+          if [ "$(( $(date +%s) - last_check ))" -ge "$VPN_CHECK_INTERVAL" ]; then
+            check_internet || break
+            last_check=$(date +%s)
+          fi
+          sleep 2
+        done
+      fi
     fi
     log "Ending session on $ANYCONNECT_SERVER; trying next server"
     stop_session

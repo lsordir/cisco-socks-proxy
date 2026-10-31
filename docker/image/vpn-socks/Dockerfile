@@ -7,7 +7,9 @@ RUN apk add --no-cache \
     openconnect \
     dante-server \
     iproute2 \
-    bind-tools
+    bind-tools \
+    curl \
+    ca-certificates
 
 COPY --from=tun2socks /usr/bin/tun2socks /usr/local/bin/tun2socks
 
