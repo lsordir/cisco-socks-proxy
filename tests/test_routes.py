@@ -10,6 +10,30 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RouteTests(unittest.TestCase):
+    def check_mtu(self, configured, negotiated, expected):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            env = dict(os.environ, reason='connect', INTERNAL_IP4_ADDRESS='192.0.2.2',
+                       TUNDEV='tun-test', VPN_MTU=configured, INTERNAL_IP4_MTU=negotiated,
+                       VPN_RESOLV_CONF=str(path / 'resolv.conf'), MTU_LOG=str(path / 'ip.log'))
+            subprocess.run(['sh', '-c', '''
+ip() { printf '%s\\n' "$*" >> "$MTU_LOG"; }
+. "$1"
+''', 'test', str(ROOT / 'docker/image/vpn-socks/vpnc-script.sh')], env=env, check=True)
+            commands = (path / 'ip.log').read_text().splitlines()
+            self.assertIn(f'link set dev tun-test mtu {expected}', commands)
+            self.assertLess(commands.index(f'link set dev tun-test mtu {expected}'),
+                            commands.index('link set dev tun-test up'))
+
+    def test_default_mtu_prevents_full_size_packets_on_unconfigured_tunnel(self):
+        self.check_mtu('', '', 1300)
+
+    def test_mtu_respects_smaller_server_negotiation(self):
+        self.check_mtu('1300', '1200', 1200)
+
+    def test_mtu_caps_server_negotiation_to_configured_limit(self):
+        self.check_mtu('1280', '1500', 1280)
+
     def check_peer(self, log, dns, expected):
         source = (ROOT / 'docker/image/vpn-socks/entrypoint.sh').read_text()
         function = source[source.index('set_vpn_default_route() {'):source.index('# ── Start Dante')]

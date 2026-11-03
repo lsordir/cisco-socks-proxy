@@ -15,6 +15,12 @@ VPN_CONNECT_TIMEOUT="${VPN_CONNECT_TIMEOUT:-150}"
 VPN_CHECK_INTERVAL="${VPN_CHECK_INTERVAL:-60}"
 VPN_CHECK_TIMEOUT="${VPN_CHECK_TIMEOUT:-10}"
 VPN_CHECK_ATTEMPTS="${VPN_CHECK_ATTEMPTS:-2}"
+export VPN_MTU="${VPN_MTU:-1300}"
+case "$VPN_MTU" in ''|*[!0-9]*) echo "VPN_MTU must be an integer" >&2; exit 1;; esac
+if [ "$VPN_MTU" -lt 576 ] || [ "$VPN_MTU" -gt 65535 ]; then
+  echo "VPN_MTU must be between 576 and 65535" >&2
+  exit 1
+fi
 VPN_CHECK_URLS="${VPN_CHECK_URLS:-https://www.gstatic.com/generate_204 https://www.cloudflare.com/cdn-cgi/trace}"
 for value in "$VPN_RECONNECT_SECONDS" "$VPN_RETRY_SECONDS" "$VPN_CONNECT_TIMEOUT" \
              "$VPN_CHECK_INTERVAL" "$VPN_CHECK_TIMEOUT" "$VPN_CHECK_ATTEMPTS"; do
@@ -229,6 +235,7 @@ while :; do
     ip tuntap add mode tun dev "$VPN_INTERFACE"
     set -- --timestamp --user="$ANYCONNECT_USER" --passwd-on-stdin \
       --script=/vpnc-script.sh --interface="$VPN_INTERFACE" \
+      --mtu="$VPN_MTU" \
       --reconnect-timeout=1 --force-dpd=10
     if [ -n "$ANYCONNECT_SERVERCERT" ]; then
       set -- "$@" --servercert="$ANYCONNECT_SERVERCERT"
