@@ -160,6 +160,26 @@ class SelectionTests(unittest.TestCase):
         self.assertIs(self.selector.active, self.a)
         self.assertTrue(self.a.ready())
 
+    def test_probe_becoming_ready_during_recovery_is_published_immediately(self):
+        self.a.running = False
+        self.b.server = 'third'
+        # Not ready at recover() entry; ready as soon as the new attempt waits.
+        with patch.object(self.b, 'ready', side_effect=[False, True]):
+            self.selector.connect = lambda slot, server: Selector.wait(
+                self.selector, slot, 'pending', True)
+            self.selector.recover()
+        self.assertIs(self.selector.active, self.b)
+        self.assertIn(('stop', 'a'), self.actions)
+        self.assertNotIn(('stop', 'b'), self.actions)
+
+    def test_publishing_does_not_recursively_promote_another_ready_slot(self):
+        self.selector.active = None
+        self.b.running = True
+        with patch.object(self.a, 'status', return_value={
+                'revision': 'publish', 'ready': True, 'published': True}):
+            self.assertTrue(Selector.wait(self.selector, self.a, 'publish', True, published=True))
+        self.assertIsNone(self.selector.active)
+
     def test_benchmark_uses_two_downloads_and_median(self):
         with patch('controller.subprocess.run') as run:
             run.side_effect = [

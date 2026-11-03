@@ -26,6 +26,10 @@ class ActiveLost(Exception):
     pass
 
 
+class SpareRecovered(Exception):
+    pass
+
+
 class Slot:
     def __init__(self, root, name, host):
         self.root, self.name, self.host = root, name, host
@@ -109,6 +113,13 @@ class Selector:
         end = time.monotonic() + (self.connect_timeout if starting else 25)
         while time.monotonic() < end:
             self.guard()
+            # A probe may finish connecting while recovery is waiting for a
+            # different server. Publish it immediately instead of staying dark.
+            if starting and not published and self.active is None:
+                for other in self.slots:
+                    if other is not slot and other.ready():
+                        self.promote(other)
+                        raise SpareRecovered()
             state = slot.status()
             if state.get('revision') == revision:
                 if not starting and not state.get('running'):
@@ -195,7 +206,14 @@ class Selector:
             index = servers.index(previous) + 1
             servers = servers[index:] + servers[:index]
         for server in servers:
-            if self.connect(self.slots[0], server):
+            try:
+                connected = self.connect(self.slots[0], server)
+            except SpareRecovered:
+                self.stop(self.slots[0])
+                self.next_scan = time.time()
+                self.save()
+                return
+            if connected:
                 self.promote(self.slots[0])
                 self.next_scan = time.time()
                 return
