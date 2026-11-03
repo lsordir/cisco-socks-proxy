@@ -61,7 +61,7 @@ class Selector:
         self.overlap = positive('VPN_OVERLAP_SECONDS', 300)
         self.margin = positive('VPN_SWITCH_PERCENT', 25)
         self.samples = positive('VPN_SPEED_SAMPLES', 2, minimum=2)
-        self.timeout = positive('VPN_SPEED_TIMEOUT', 20)
+        self.timeout = positive('VPN_SPEED_TIMEOUT', 45)
         self.min_bytes = positive('VPN_SPEED_MIN_BYTES', 900000)
         self.max_age = positive('VPN_RECONNECT_SECONDS', 43200)
         # Startup health checks may take up to 2 * 2 * 10 seconds by default.

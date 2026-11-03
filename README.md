@@ -74,7 +74,7 @@ All VPN and selection settings are read from `env/cisco/.env`:
 | `VPN_OVERLAP_SECONDS` | `300` | Keep old and new VPNs during handover |
 | `VPN_SWITCH_PERCENT` | `25` | Minimum improvement to replace incumbent |
 | `VPN_SPEED_SAMPLES` | `2` | Downloads per benchmark; minimum 2 |
-| `VPN_SPEED_TIMEOUT` | `20` | Maximum seconds per download |
+| `VPN_SPEED_TIMEOUT` | `45` | Maximum seconds per download |
 | `VPN_SPEED_URL` | Cloudflare 1 MB resource | HTTPS speed-test resource |
 | `VPN_SPEED_MIN_BYTES` | `900000` | Reject smaller responses |
 | `VPN_RECONNECT_SECONDS` | `43200` | Attempt renewal after this session age |

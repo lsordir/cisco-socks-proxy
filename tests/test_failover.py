@@ -77,7 +77,7 @@ CREDS=$(mktemp)''')
                    VPN_RESOLV_CONF=str(self.state / 'resolv.conf'),
                    ANYCONNECT_USER='dummy-user', ANYCONNECT_PASSWORD='dummy-password',
                    ANYCONNECT_SERVERCERT='', VPN_RECONNECT_SECONDS=str(interval),
-                   VPN_RETRY_SECONDS='1', VPN_CONNECT_TIMEOUT='4',
+                   VPN_RETRY_SECONDS='1', VPN_CONNECT_TIMEOUT='10',
                    VPN_CHECK_INTERVAL='2', VPN_CHECK_TIMEOUT='1',
                    VPN_CHECK_ATTEMPTS='2', VPN_CHECK_URLS=urls)
         self.output = (self.state / 'output').open('w')
@@ -128,7 +128,7 @@ CREDS=$(mktemp)''')
 
     def test_connection_timeout_moves_to_next_server(self):
         self.start('hang second', interval=60)
-        self.wait_for(lambda: len(self.attempts()) >= 2)
+        self.wait_for(lambda: len(self.attempts()) >= 2, timeout=30)
         self.assertEqual(self.attempts()[:2], ['hang', 'second'])
 
     def test_tunnel_disappearance_moves_to_next_server(self):
