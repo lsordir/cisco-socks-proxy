@@ -12,11 +12,20 @@ async def relay(reader, writer):
         writer.write_eof()
 
 
-async def handle(reader, writer):
+async def handle(reader, writer, targets=None):
     upstream = None
     try:
-        remote, upstream = await asyncio.wait_for(
-            asyncio.open_connection('127.0.0.1', 1080), timeout=5)
+        # Choose once per TCP connection. Never move an established stream or
+        # replay SOCKS/application bytes onto another VPN after a failure.
+        for host, port in targets if targets is not None else [('127.0.0.1', 1080)]:
+            try:
+                remote, upstream = await asyncio.wait_for(
+                    asyncio.open_connection(host, port), timeout=5)
+                break
+            except (OSError, asyncio.TimeoutError):
+                continue
+        if upstream is None:
+            return
         await asyncio.gather(relay(reader, upstream), relay(remote, writer))
     except (OSError, asyncio.TimeoutError):
         pass

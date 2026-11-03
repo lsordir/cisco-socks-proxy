@@ -14,8 +14,6 @@ services:
     entrypoint: ["python3", "/app/worker.py"]
     environment:
       VPN_SLOT: a
-    ports:
-      - "127.0.0.1:${CISCO_SOCKS_PORT:-1080}:1082"
     privileged: true
     stop_grace_period: 20s
 
@@ -24,8 +22,6 @@ services:
     entrypoint: ["python3", "/app/worker.py"]
     environment:
       VPN_SLOT: b
-    ports:
-      - "127.0.0.1:${CISCO_SOCKS_PORT_B:-1081}:1082"
     privileged: true
     stop_grace_period: 20s
 
@@ -35,6 +31,16 @@ services:
     depends_on:
       - vpn-socks
       - vpn-socks-b
+
+  vpn-gateway:
+    <<: *vpn
+    entrypoint: ["python3", "/app/gateway.py"]
+    volumes:
+      - vpn-control:/control:ro
+    ports:
+      - "127.0.0.1:${CISCO_SOCKS_PORT:-1080}:1080"
+    depends_on:
+      - vpn-selector
 
 volumes:
   vpn-control:
