@@ -1,10 +1,40 @@
+x-vpn: &vpn
+  image: cisco-socks-proxy:local
+  build:
+    context: docker/image/vpn-socks
+  env_file:
+    - ./env/cisco/.env
+  volumes:
+    - vpn-control:/control
+  restart: unless-stopped
+
 services:
   vpn-socks:
-    build:
-      context: docker/image/vpn-socks
-    env_file:
-      - ./env/cisco/.env
+    <<: *vpn
+    entrypoint: ["python3", "/app/worker.py"]
+    environment:
+      VPN_SLOT: a
     ports:
-      - "127.0.0.1:1080:1080"
+      - "127.0.0.1:${CISCO_SOCKS_PORT:-1080}:1082"
     privileged: true
-    restart: unless-stopped
+    stop_grace_period: 20s
+
+  vpn-socks-b:
+    <<: *vpn
+    entrypoint: ["python3", "/app/worker.py"]
+    environment:
+      VPN_SLOT: b
+    ports:
+      - "127.0.0.1:${CISCO_SOCKS_PORT_B:-1081}:1082"
+    privileged: true
+    stop_grace_period: 20s
+
+  vpn-selector:
+    <<: *vpn
+    entrypoint: ["python3", "/app/controller.py"]
+    depends_on:
+      - vpn-socks
+      - vpn-socks-b
+
+volumes:
+  vpn-control:

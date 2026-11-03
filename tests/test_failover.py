@@ -56,6 +56,7 @@ class FailoverTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state = Path(self.tmp.name)
+        (self.state / 'resolv.conf').write_text('nameserver 127.0.0.11\n')
         for name in ('ip', 'getent', 'openconnect', 'curl'):
             p = self.state / name
             p.write_text(FAKE)
@@ -73,6 +74,7 @@ CREDS=$(mktemp)''')
     def start(self, servers, interval, urls='https://primary.test https://backup.test'):
         env = dict(os.environ, PATH=str(self.state) + ':' + os.environ['PATH'],
                    TEST_STATE=str(self.state), ANYCONNECT_SERVERS=servers,
+                   VPN_RESOLV_CONF=str(self.state / 'resolv.conf'),
                    ANYCONNECT_USER='dummy-user', ANYCONNECT_PASSWORD='dummy-password',
                    ANYCONNECT_SERVERCERT='', VPN_RECONNECT_SECONDS=str(interval),
                    VPN_RETRY_SECONDS='1', VPN_CONNECT_TIMEOUT='4',
@@ -114,6 +116,7 @@ CREDS=$(mktemp)''')
         self.assertEqual(self.attempts()[:5], ['bad', 'second', 'third', 'bad', 'second'])
         self.stop()
         self.assertFalse((self.state / 'tunnel').exists())
+        self.assertEqual((self.state / 'resolv.conf').read_text(), 'nameserver 127.0.0.11\n')
 
     def test_vpn_process_death_moves_to_next_server(self):
         self.start('first second', interval=60)

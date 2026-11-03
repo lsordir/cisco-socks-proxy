@@ -85,10 +85,19 @@ set_vpn_default_route() {
   # 1) Host route: VPN server itself must keep using the original gateway
   #    Otherwise changing default route kills the tunnel.
   local vpn_ip
-  vpn_ip=$(getent hosts "$ANYCONNECT_SERVER" 2>/dev/null | awk '{print $1; exit}')
+  # Preserve the actual peer OpenConnect used, including IPv4-mapped IPv6
+  # addresses returned by fake-IP DNS/proxy software on the host.
+  vpn_ip=$(sed -nE 's/.*Connected to (\[::ffff:)?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*/\2/p' "$OC_LOG" | tail -n 1)
+  if [ -z "$vpn_ip" ]; then
+    vpn_ip=$(getent hosts "$ANYCONNECT_SERVER" 2>/dev/null | awk '
+      {sub(/^::ffff:/, "", $1); if ($1 ~ /^[0-9]+\./) {print $1; exit}}')
+  fi
   if [ -n "$vpn_ip" ] && [ -n "$ORIG_GW" ]; then
-    ip route add "$vpn_ip/32" via "$ORIG_GW" dev "$ORIG_IF" 2>/dev/null || true
+    ip route replace "$vpn_ip/32" via "$ORIG_GW" dev "$ORIG_IF" || return 1
     log "Host route: $vpn_ip via $ORIG_GW dev $ORIG_IF"
+  else
+    log "Cannot preserve the VPN server route; refusing to change the default route"
+    return 1
   fi
 
   # 2) Replace default route to go through VPN tunnel
@@ -163,6 +172,7 @@ check_internet() {
 
 # Stop all session processes before restoring routes or trying another server.
 stop_session() {
+  [ -z "$VPN_READY_FILE" ] || rm -f "$VPN_READY_FILE"
   local pid
   if [ -n "$SOCKD_PID" ]; then
     kill -TERM -- "-$SOCKD_PID" 2>/dev/null || true
@@ -190,16 +200,19 @@ stop_session() {
     ip route replace default via "$ORIG_GW" dev "$ORIG_IF" metric 0
     ip route del default via "$ORIG_GW" dev "$ORIG_IF" metric 200 2>/dev/null || true
   fi
+  cat "$RESOLV_BACKUP" > "${VPN_RESOLV_CONF:-/etc/resolv.conf}"
 }
 
 cleanup() {
   trap '' TERM INT
   stop_session
-  rm -f "$CREDS" "$OC_LOG"
+  rm -f "$CREDS" "$OC_LOG" "$RESOLV_BACKUP"
 }
 
 CREDS=$(mktemp)
 OC_LOG=$(mktemp)
+RESOLV_BACKUP=$(mktemp)
+cat "${VPN_RESOLV_CONF:-/etc/resolv.conf}" > "$RESOLV_BACKUP"
 OC_PID="" SOCKD_PID="" TUN2_PID="" LOG_PID=""
 trap 'exit 0' TERM INT
 trap cleanup EXIT
@@ -234,6 +247,7 @@ while :; do
       connected_at=$(date +%s)
       log "Checking internet access through VPN..."
       if check_internet; then
+        [ -z "$VPN_READY_FILE" ] || touch "$VPN_READY_FILE"
         last_check=$(date +%s)
         log "Ready. SOCKS5 on :$SOCKS_PORT; reconnect in ${VPN_RECONNECT_SECONDS}s"
         while kill -0 "$OC_PID" 2>/dev/null && \
@@ -259,6 +273,7 @@ while :; do
     fi
     log "Ending session on $ANYCONNECT_SERVER; trying next server"
     stop_session
+    [ "${VPN_MANAGED:-0}" != 1 ] || exit 0
     sleep "$VPN_RETRY_SECONDS"
   done
 done

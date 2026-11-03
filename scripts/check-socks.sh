@@ -2,21 +2,19 @@
 set -e
 cd "$(dirname "$0")/.."
 
-echo "Starting vpn-socks..."
-docker compose up -d vpn-socks
-
-echo "Waiting for SOCKS on 127.0.0.1:1080 (VPN may take 30-60s)..."
+docker compose up -d
+echo "Waiting for either SOCKS slot (1080 or 1081)..."
 i=0
-while [ $i -lt 30 ]; do
-  if curl -s -x socks5h://127.0.0.1:1080 --connect-timeout 3 -o /dev/null https://ifconfig.io 2>/dev/null; then
-    echo "SOCKS OK. VPN exit IP:"
-    curl -s -x socks5h://127.0.0.1:1080 https://ifconfig.io
-    echo ""
-    exit 0
-  fi
+while [ "$i" -lt 30 ]; do
+  for port in "${CISCO_SOCKS_PORT:-1080}" "${CISCO_SOCKS_PORT_B:-1081}"; do
+    if result=$(curl --fail --silent --noproxy "" --proxy "socks5h://127.0.0.1:$port" \
+        --connect-timeout 3 --max-time 8 https://ifconfig.io/ip); then
+      echo "SOCKS on $port is working. VPN exit IP: $result"
+      exit 0
+    fi
+  done
   sleep 5
   i=$((i + 1))
 done
-
-echo "SOCKS not responding. Check: docker compose logs -f vpn-socks"
+echo "No SOCKS slot is responding. Check: docker compose logs vpn-selector"
 exit 1

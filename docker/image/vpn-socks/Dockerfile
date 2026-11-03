@@ -11,14 +11,17 @@ RUN apk add --no-cache \
     curl \
     ca-certificates
 
+RUN apk add --no-cache python3
+
 COPY --from=tun2socks /usr/bin/tun2socks /usr/local/bin/tun2socks
 
 COPY entrypoint.sh /entrypoint.sh
 COPY vpnc-script.sh /vpnc-script.sh
 COPY sockd.conf /etc/sockd.conf.template
+COPY control /app
 
 RUN chmod +x /entrypoint.sh /vpnc-script.sh
 
-EXPOSE 1080
+EXPOSE 1080 1082
 
 ENTRYPOINT ["/entrypoint.sh"]
