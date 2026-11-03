@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 
 from common import read_json
-from forward import handle
+from forward import handle, run_server
 
 
 HOSTS = {'a': 'vpn-socks', 'b': 'vpn-socks-b'}
@@ -40,9 +40,7 @@ async def main():
     async def route(reader, writer):
         await handle(reader, writer, targets(root))
 
-    server = await asyncio.start_server(route, '0.0.0.0', 1080)
-    async with server:
-        await server.serve_forever()
+    await run_server(route, 1080)
 
 
 if __name__ == '__main__':
